@@ -50,7 +50,7 @@ if st.button("Ejecutar"):
                 
                 # Filtrar tareas por tipo
                 forum_assignments = [a for a in course_assignments if "foro academico" in clean_string(a["name"].lower())]
-                teamwork_assignments = [a for a in course_assignments if "trabajo en equipo" in clean_string(a["name"].lower())]
+                teamwork_assignments = [a for a in course_assignments if "trabajo en equipo" in clean_string(a["name"].lower()) or "tarea en equipo" in clean_string(a["name"].lower())]
                 final_assignments = [a for a in course_assignments if "trabajo final" in clean_string(a["name"].lower())]
                 if is_massive:
                     final_assignments = [a for a in course_assignments if "cuestionario final" in clean_string(a["name"].lower())]
@@ -60,7 +60,7 @@ if st.button("Ejecutar"):
                     st.info(f"No hay tareas llamadas 'Foro academico'")
                 else:
                     for assignment in forum_assignments:
-                        st.write(f"##### Tarea: {assignment['name']}")
+                        st.write(f"##### Tarea: {assignment['name']} - {assignment['id']}")
                         details, third_column = analyze_assignment(session, course_id, assignment, "forum", is_massive)
                         st.dataframe(return_df_for_table(details, third_column))
                 
@@ -69,16 +69,16 @@ if st.button("Ejecutar"):
                     st.info(f"No hay tareas llamadas 'Trabajo en equipo'")
                 else:
                     for assignment in teamwork_assignments:
-                        st.write(f"##### Tarea: {assignment['name']}")
+                        st.write(f"##### Tarea: {assignment['name']} - {assignment['id']}")
                         details, third_column = analyze_assignment(session, course_id, assignment, "teamwork", is_massive)
                         st.dataframe(return_df_for_table(details, third_column))
                 
                 #Reviso las tareas de trabajo final
                 if not final_assignments:
-                    st.info(f"No hay tareas llamadas 'Trabajo final'")
+                    st.info(f"No hay tareas llamadas 'Trabajo final o Cuestionario Final'")
                 else:
                     for assignment in final_assignments:
-                        st.write(f"##### Tarea: {assignment['name']}")
+                        st.write(f"##### Tarea: {assignment['name']} - {assignment['id']}")
                         details, third_column = analyze_assignment(session, course_id, assignment, "finalwork", is_massive)
                         st.dataframe(return_df_for_table(details, third_column))
                         

@@ -4,41 +4,51 @@ from helpers import clean_string
 from config import BASE_URL
 
 
-def canvas_request(session, method, endpoint, payload=None):
+def canvas_request(session, method, endpoint, payload=None, paginated=False):
     """
-    Realiza peticiones a la API de Canvas de forma centralizada.
+    Realiza peticiones a la API de Canvas y maneja la paginación si es necesario.
     
     :param session: Sesión de requests.Session() configurada previamente.
     :param method: Método HTTP ('get', 'post', 'put', 'delete').
     :param endpoint: Endpoint de la API (por ejemplo, "/courses/123/assignments").
     :param payload: Datos a enviar (para POST/PUT).
+    :param paginated: Si es True, recorre todas las páginas y devuelve una lista con todos los resultados.
     :return: La respuesta en formato JSON o None en caso de error.
     """
     if not BASE_URL:
         raise ValueError("BASE_URL no está configurada. Usa set_base_url() para establecerla.")
 
     url = f"{BASE_URL}{endpoint}"
+    results = []
+    
     try:
-        if method.lower() == "get":
-            response = session.get(url)
-        elif method.lower() == "post":
-            response = session.post(url, json=payload)
-        elif method.lower() == "put":
-            response = session.put(url, json=payload)
-        elif method.lower() == "delete":
-            response = session.delete(url)
-        else:
-            print("Método HTTP no soportado")
-            return None
+        while url:
+            if method.lower() == "get":
+                response = session.get(url)
+            elif method.lower() == "post":
+                response = session.post(url, json=payload)
+            elif method.lower() == "put":
+                response = session.put(url, json=payload)
+            elif method.lower() == "delete":
+                response = session.delete(url)
+            else:
+                print("Método HTTP no soportado")
+                return None
 
-        if not response.ok:
-            print(f"Error en la petición a {url} ({response.status_code}): {response.text}")
-            return None
+            if not response.ok:
+                print(f"Error en la petición a {url} ({response.status_code}): {response.text}")
+                return None
 
-        if response.text:
-            return response.json()
-        else:
-            return None
+            data = response.json()
+            if paginated:
+                results.extend(data)  # Agregar todos los elementos a la lista
+                
+                # Manejar paginación buscando la URL de la siguiente página
+                url = response.links.get("next", {}).get("url")  # Si hay otra página, seguimos
+            else:
+                return data  # Si no es paginado, devolvemos la respuesta normal
+
+        return results if paginated else None
 
     except requests.exceptions.RequestException as e:
         print(f"Excepción en la petición a {url}: {e}")
@@ -100,47 +110,75 @@ def check_team_assignments(session, course_id):
     Verifica si se han creado equipos y si todos los estudiantes están asignados a un equipo
     en la categoría 'Equipo de trabajo'.
     """
-    group_categories = canvas_request(session, "get", f"/courses/{course_id}/group_categories")
+    group_categories = canvas_request(session, "get", f"/courses/{course_id}/group_categories", paginated=True)
     if not group_categories:
         return None
 
     equipo_de_trabajo = next((gc for gc in group_categories if gc.get("name") == "Equipo de trabajo"), None)
     if not equipo_de_trabajo:
-        return {"teams_created": False, "all_assigned": False}
-    
-    group_category_id = equipo_de_trabajo["id"]
-    groups = canvas_request(session, "get", f"/group_categories/{group_category_id}/groups")
-    if not groups:
-        return {"teams_created": False, "all_assigned": False}
+        return {"teams_created": False, "all_assigned": False, "group_memberships": {}}
 
-    students_response = canvas_request(session, "get", f"/courses/{course_id}/students")
+    group_category_id = equipo_de_trabajo["id"]
+
+    # Obtener **TODOS** los equipos usando paginación
+    groups = canvas_request(session, "get", f"/group_categories/{group_category_id}/groups", paginated=True)
+    if not groups:
+        return {"teams_created": False, "all_assigned": False, "group_memberships": {}}
+
+    # Obtener **TODOS** los estudiantes del curso
+    students_response = canvas_request(session, "get", f"/courses/{course_id}/students", paginated=True)
     if not students_response:
         return None
-    
-    student_ids = {student["id"] for student in students_response}
-    assigned_student_ids = set()
 
+    student_ids = {student["id"] for student in students_response}  # Set con todos los estudiantes
+    assigned_student_ids = set()
+    group_memberships = {}
+
+    # Obtener **TODAS** las membresías de los grupos
     for group in groups:
-        memberships = canvas_request(session, "get", f"/groups/{group['id']}/memberships")
+        memberships = canvas_request(session, "get", f"/groups/{group['id']}/memberships", paginated=True)
         if memberships:
             assigned_student_ids.update(m.get("user_id") for m in memberships)
+            group_memberships[group["name"]] = [m.get("user_id") for m in memberships]  # Guardar miembros por grupo
 
-    all_assigned = student_ids.issubset(assigned_student_ids)
-     
+    all_assigned = student_ids.issubset(assigned_student_ids)  # Verificar si todos están asignados
+
     return {
         "teams_created": True,
         "all_assigned": all_assigned,
         "unassigned_students": student_ids - assigned_student_ids,
-        "total_students": student_ids
+        "total_students": student_ids,
+        "total_teams": len(groups),
+        "group_memberships": group_memberships  # Diccionario con grupos y miembros
     }
 
+    
+
+def get_quiz_details(session, course_id, quiz_id):
+    """
+    Obtiene los detalles de un cuestionario (quiz) en Canvas.
+    """
+    quiz_details = canvas_request(session, "get", f"/courses/{course_id}/quizzes/{quiz_id}")
+    
+    if not quiz_details:
+        return None
+    
+    return {
+        "intentos_permitidos": quiz_details.get("allowed_attempts"),
+        "tiempo_limite": quiz_details.get("time_limit", "Sin límite"),
+        "mezclar_respuestas": quiz_details.get("shuffle_answers", False),
+        "permitir_que_estudiantes_vean_respuestas": quiz_details.get("hide_results", False) != "always",
+        "mostrar_respuestas_correctas": quiz_details.get("show_correct_answers"),
+        "cantidad_de_preguntas": quiz_details.get("question_count"),
+    }
+    
        
 def analyze_assignment(session, course_id, assignment, assignment_type, is_massive=False):
     """
-    Función base para analizar una tarea según su tipo (foro, trabajo final, trabajo en equipo).
+    Función base para analizar una tarea según su tipo (foro, trabajo final, trabajo en equipo, cuestionario final).
     """
 
-    # Si el curso es masivo y la tarea es "finalwork", cambiamos el tipo a "quiz_final"
+    # Si el curso es masivo y la tarea es "finalwork", lo cambiamos a "quiz_final"
     if is_massive and assignment_type == "finalwork":
         assignment_type = "quiz_final"
 
@@ -152,7 +190,6 @@ def analyze_assignment(session, course_id, assignment, assignment_type, is_massi
     rules = {
         "forum": {
             "submission_types": ['discussion_topic'],
-            "allowed_attempts": -1,
             "points_possible": 100,
             "module_weight": 20,
             "discussion_type": "threaded",
@@ -168,6 +205,8 @@ def analyze_assignment(session, course_id, assignment, assignment_type, is_massi
             "allowed_attempts": 1,
             "points_possible": 30,
             "module_weight": 30,
+            "time_limit": 90,
+            "question_count": 30
         },
         "teamwork": {
             "submission_types": ["online_upload"],
@@ -178,47 +217,127 @@ def analyze_assignment(session, course_id, assignment, assignment_type, is_massi
     }
 
     specific_rules = rules.get(assignment_type, {})
-    
     result = {}
 
-    # Diccionario con los resultados directamente, incluyendo la verificación ✅/🟥
+    # Si es un cuestionario final, obtenemos sus detalles adicionales
+    quiz_details = None
+    if assignment_type == "quiz_final" and "quiz_id" in assignment:
+        quiz_details = get_quiz_details(session, course_id, assignment["quiz_id"])
+
+    # Poner rúbrica en todas las tareas excepto en el cuestionario final
     if assignment_type != "quiz_final":
-        result = {
-            "Tiene rubrica": (rubric_details["name"], "✅" if rubric_details["has_rubric"] else "🟥"),
-            "Puntos rubrica": (str(int(rubric_details["rubric_points"])) if rubric_details["has_rubric"] else "N/A", "✅" if rubric_details["rubric_points"] == 100 else "🟥"),
-            "Usa rubrica para calificar": ("Si" if rubric_details["rubric_used_for_grading"] else "No", "✅" if rubric_details["rubric_used_for_grading"] else "🟥"),
-
-        }
-    
-    result.update({
-        "Tipo de entrega": ("En línea" if assignment.get("submission_types") == specific_rules.get("submission_types") else "Otro", "✅" if assignment.get("submission_types") == specific_rules.get("submission_types") else "🟥"),
-        "Intentos permitidos": ("Ilimitado" if assignment.get("allowed_attempts") == -1 else str(assignment.get("allowed_attempts")), "✅" if assignment.get("allowed_attempts") == specific_rules.get("allowed_attempts") else "🟥"),
-        "Tipo de calificación": ("Puntos" if assignment.get("grading_type") == "points" else "Otro", "✅" if assignment.get("grading_type") == "points" else "🟥"),
-        "Puntos posibles": (str(int(assignment.get("points_possible"))), "✅" if assignment.get("points_possible") == specific_rules.get("points_possible") else "🟥"),
-        "Ponderación": (f"{int(module_info['weight'])}%", "✅" if int(module_info['weight']) == specific_rules.get("module_weight") else "🟥"),
-        "Módulo": (module_info["name"], "✅" if clean_string(module_info["name"]) == clean_string(assignment.get("name")) else "🟥"),
-    })
-
-    # Verificación adicional para "foro"
-    if assignment_type == "forum":
-        result["Desactivar respuestas hilvanadas"] = (
-            "Si" if assignment.get('discussion_topic', {}).get("discussion_type") == specific_rules.get("discussion_type") else "No",
-            "✅" if assignment.get('discussion_topic', {}).get("discussion_type") == specific_rules.get("discussion_type") else "🟥"
-        )
-
-    # Verificación para "teamwork"
-    elif assignment_type == "teamwork":
-        group_categories_check = check_group_categories(session, course_id)
-        team_options = check_team_assignments(session, course_id)
         result.update({
-            "Es trabajo en grupo": ("Si" if assignment.get("group_category_id") else "No", "✅" if assignment.get("group_category_id") else "🟥"),
-            "Existe Equipo de trabajo": ("Si" if group_categories_check["Equipo de trabajo"]["exists"] else "No", "✅" if group_categories_check["Equipo de trabajo"]["exists"] else "🟥"),
-            "Existe Project Groups": ("Si" if not group_categories_check["Project Groups"]["exists"] else "No", "✅" if not group_categories_check["Project Groups"]["exists"] else "🟥"),
-            "Equipos creados": ("Si" if team_options and team_options['teams_created'] else "No", "✅" if team_options and team_options['teams_created'] else "🟥"),
-            "Alumnos Asignados": ("Si" if team_options and team_options['all_assigned'] else f"{len(team_options['unassigned_students'])} sin asignar", "✅" if team_options and team_options['all_assigned'] else "🟥"),
+            "Tiene rúbrica": (
+                rubric_details["name"],
+                "✅" if rubric_details["has_rubric"] else "🟥"
+            ),
+            "Puntos rúbrica": (
+                rubric_details["rubric_points"] if rubric_details["has_rubric"] else "N/A",
+                "✅" if rubric_details["rubric_points"] == 100 else "🟥"
+            ),
+            "Usa rúbrica para calificar": (
+                "Sí" if rubric_details["rubric_used_for_grading"] else "No",
+                "✅" if rubric_details["rubric_used_for_grading"] else "🟥"
+            ),
         })
 
-    # Separar los valores y los estados en listas
+    # Configuración de entrega
+    result.update({
+        "Tipo de entrega": (
+            assignment.get("submission_types"), 
+            "✅" if assignment.get("submission_types") == specific_rules.get("submission_types") else "🟥"
+        ),
+    })
+
+    if assignment_type != "forum" and assignment_type != "quiz_final":
+        result.update({
+            "Intentos permitidos": (
+                "Ilimitado" if assignment.get("allowed_attempts") == -1 else str(assignment.get("allowed_attempts")),
+                "✅" if assignment.get("allowed_attempts") == specific_rules.get("allowed_attempts") else "🟥"
+            ),
+        })
+
+    result.update({
+        "Tipo de calificación": (
+            "Puntos" if assignment.get("grading_type") == "points" else "Otro",
+            "✅" if assignment.get("grading_type") == "points" else "🟥"
+        ),
+        "Puntos posibles": (
+            str(int(assignment.get("points_possible"))),
+            "✅" if assignment.get("points_possible") == specific_rules.get("points_possible") else "🟥"
+        ),
+        "Ponderación": (
+            f"{int(module_info['weight'])}%", 
+            "✅" if int(module_info['weight']) == specific_rules.get("module_weight") else "🟥"
+        ),
+        "Módulo": (
+            module_info["name"], 
+            "✅" if clean_string(module_info["name"]) == clean_string(assignment.get("name")) else "🟥"
+        ),
+    })
+
+    # Si es un trabajo en equipo, agregar detalles de equipos
+    if assignment_type == "teamwork":
+        group_categories_check = check_group_categories(session, course_id)
+        team_options = check_team_assignments(session, course_id)
+
+        result.update({
+            "Es trabajo en grupo": (
+                "Sí" if assignment.get("group_category_id") else "No",
+                "✅" if assignment.get("group_category_id") else "🟥"
+            ),
+            "Existe Equipo de trabajo": (
+                "Sí" if group_categories_check["Equipo de trabajo"]["exists"] else "No",
+                "✅" if group_categories_check["Equipo de trabajo"]["exists"] else "🟥"
+            ),
+            "Existe Project Groups": (
+                "Sí" if not group_categories_check["Project Groups"]["exists"] else "No",
+                "✅" if not group_categories_check["Project Groups"]["exists"] else "🟥"
+            ),
+            "Equipos creados": (
+                f"{team_options['total_teams']} equipos" if team_options and team_options['teams_created'] else "No",
+                "✅" if team_options and team_options['teams_created'] else "🟥"
+            ),
+            "Grupos": (
+                ", ".join(team_options["group_memberships"].keys()) if team_options and team_options["group_memberships"] else "No hay grupos",
+                "✅" if team_options and team_options["group_memberships"] else "🟥"
+            ),
+            "Alumnos Asignados": (
+                f"{len(team_options['unassigned_students'])} sin asignar" if team_options and not team_options["all_assigned"] else "Todos asignados",
+                "✅" if team_options and team_options["all_assigned"] else "🟥"
+            ),
+    })
+        
+        # Si es un cuestionario final, agregar detalles del quiz
+    if assignment_type == "quiz_final" and quiz_details:
+        result.update({
+            "Numero de preguntas": (
+                quiz_details["cantidad_de_preguntas"],
+                "✅" if quiz_details["cantidad_de_preguntas"] == specific_rules.get("question_count") else "🟥"
+            ),
+            "Intentos permitidos": (
+                quiz_details["intentos_permitidos"], 
+                "✅" if quiz_details["intentos_permitidos"] == specific_rules.get("allowed_attempts") else "🟥"
+            ),
+            "Límite de tiempo (min)": (
+                quiz_details["tiempo_limite"],
+                "✅" if quiz_details["tiempo_limite"] == specific_rules.get("time_limit") else "🟥"
+            ),
+            "Mezclar respuestas": (
+                "Sí" if quiz_details["mezclar_respuestas"] else "No", 
+                "✅" if quiz_details["mezclar_respuestas"] else "🟥"
+            ),
+            "Permitir que estudiantes vean respuestas": (
+                "Sí" if quiz_details["permitir_que_estudiantes_vean_respuestas"] else "No",
+                "✅" if quiz_details["permitir_que_estudiantes_vean_respuestas"] else "🟥"
+            ),
+            "Mostrar respuestas correctas": (
+                "Sí" if quiz_details["mostrar_respuestas_correctas"] else "No",
+                "✅" if quiz_details["mostrar_respuestas_correctas"] else "🟥"
+                ),
+        })
+
+    # Separar valores y estados en listas
     detalles = {key: value[0] for key, value in result.items()}
     third_column = [value[1] for key, value in result.items()]
 
@@ -227,6 +346,15 @@ def analyze_assignment(session, course_id, assignment, assignment_type, is_massi
  
 def return_df_for_table(details, estado):
     """Muestra los detalles en forma de tabla usando pandas."""
-    data = {"Requerimiento": list(details.keys()), "Actual": list(details.values()), "Estado":estado}
+    
+    # Convertimos todos los valores de "Actual" a strings para evitar problemas con PyArrow
+    actual_values = [str(value) if not isinstance(value, str) else value for value in details.values()]
+    
+    data = {
+        "Requerimiento": list(details.keys()), 
+        "Actual": actual_values,  # Aseguramos que todo sea string
+        "Estado": estado
+    }
+    
     df = pd.DataFrame(data)
     return df
