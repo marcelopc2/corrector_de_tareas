@@ -1,5 +1,4 @@
 # Ignorar archivos de configuración que contengan credenciales
-config.py
 .env
 *.env
 # Ignorar archivos de compilación o temporales
