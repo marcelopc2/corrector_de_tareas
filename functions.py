@@ -235,9 +235,9 @@ def analyze_assignment(session, course_id, assignment, assignment_type, is_massi
 
     # Poner rúbrica en todas las tareas excepto en el cuestionario final
     if assignment_type != "quiz_final":
-        result.update({
+        result = {
             "Tiene rúbrica": (
-                rubric_details["name"],
+                rubric_details.get("name", "Sin rúbrica"),  # Si "name" no existe, muestra "Sin rúbrica"
                 "✅" if rubric_details["has_rubric"] else "🟥"
             ),
             "Puntos rúbrica": (
@@ -248,7 +248,7 @@ def analyze_assignment(session, course_id, assignment, assignment_type, is_massi
                 "Sí" if rubric_details["rubric_used_for_grading"] else "No",
                 "✅" if rubric_details["rubric_used_for_grading"] else "🟥"
             ),
-        })
+        }
 
     # Configuración de entrega
     result.update({
