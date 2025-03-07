@@ -108,7 +108,7 @@ def check_group_categories(session, course_id):
 def check_team_assignments(session, course_id):
     """
     Verifica si se han creado equipos y si todos los estudiantes están asignados a un equipo
-    en la categoría 'Equipo de trabajo'.
+    en la categoría 'Equipo de trabajo'. Filtra profesores y asistentes.
     """
     group_categories = canvas_request(session, "get", f"/courses/{course_id}/group_categories", paginated=True)
     if not group_categories:
@@ -116,21 +116,28 @@ def check_team_assignments(session, course_id):
 
     equipo_de_trabajo = next((gc for gc in group_categories if gc.get("name") == "Equipo de trabajo"), None)
     if not equipo_de_trabajo:
-        return {"teams_created": False, "all_assigned": False, "group_memberships": {}}
+        return {"teams_created": False, "all_assigned": False, "group_memberships": {}, "unassigned_students": []}
 
     group_category_id = equipo_de_trabajo["id"]
 
-    # Obtener **TODOS** los equipos usando paginación
+    # Obtener **TODOS** los equipos con paginación
     groups = canvas_request(session, "get", f"/group_categories/{group_category_id}/groups", paginated=True)
     if not groups:
-        return {"teams_created": False, "all_assigned": False, "group_memberships": {}}
+        return {"teams_created": False, "all_assigned": False, "group_memberships": {}, "unassigned_students": []}
 
-    # Obtener **TODOS** los estudiantes del curso
-    students_response = canvas_request(session, "get", f"/courses/{course_id}/students", paginated=True)
-    if not students_response:
+    # Obtener **TODOS** los usuarios del curso con paginación
+    users_response = canvas_request(session, "get", f"/courses/{course_id}/users", paginated=True)
+    if not users_response:
         return None
 
-    student_ids = {student["id"] for student in students_response}  # Set con todos los estudiantes
+    # **Filtrar solo estudiantes**, ignorando los que no tienen 'enrollments'
+    student_dict = {
+        user["id"]: {"name": user["name"], "email": user.get("email", "Sin correo")}
+        for user in users_response
+        if user.get("enrollments") and "student" in user["enrollments"][0]["type"]
+    }
+
+    student_ids = set(student_dict.keys())  # Set con IDs de todos los estudiantes
     assigned_student_ids = set()
     group_memberships = {}
 
@@ -138,20 +145,22 @@ def check_team_assignments(session, course_id):
     for group in groups:
         memberships = canvas_request(session, "get", f"/groups/{group['id']}/memberships", paginated=True)
         if memberships:
-            assigned_student_ids.update(m.get("user_id") for m in memberships)
-            group_memberships[group["name"]] = [m.get("user_id") for m in memberships]  # Guardar miembros por grupo
+            assigned_student_ids.update(m.get("user_id") for m in memberships if m.get("user_id") in student_dict)
+            group_memberships[group["name"]] = [student_dict.get(m.get("user_id"), {"name": "Desconocido"})["name"] for m in memberships]
 
-    all_assigned = student_ids.issubset(assigned_student_ids)  # Verificar si todos están asignados
+    # Determinar estudiantes sin asignar
+    unassigned_students = student_ids - assigned_student_ids
+    unassigned_details = [student_dict[uid] for uid in unassigned_students]  # Lista con nombres y correos de los no asignados
+    all_assigned = len(unassigned_students) == 0
 
     return {
         "teams_created": True,
         "all_assigned": all_assigned,
-        "unassigned_students": student_ids - assigned_student_ids,
-        "total_students": student_ids,
+        "unassigned_students": unassigned_details,  # Ahora devuelve detalles de los estudiantes sin asignar
+        "total_students": len(student_ids),
         "total_teams": len(groups),
-        "group_memberships": group_memberships  # Diccionario con grupos y miembros
+        "group_memberships": group_memberships
     }
-
     
 
 def get_quiz_details(session, course_id, quiz_id):
@@ -281,6 +290,9 @@ def analyze_assignment(session, course_id, assignment, assignment_type, is_massi
         group_categories_check = check_group_categories(session, course_id)
         team_options = check_team_assignments(session, course_id)
 
+        unassigned_list = team_options["unassigned_students"]
+        unassigned_text = ", ".join([f"{student['name']} ({student['email']})" for student in unassigned_list]) if unassigned_list else "Todos asignados"
+
         result.update({
             "Es trabajo en grupo": (
                 "Sí" if assignment.get("group_category_id") else "No",
@@ -302,8 +314,8 @@ def analyze_assignment(session, course_id, assignment, assignment_type, is_massi
                 ", ".join(team_options["group_memberships"].keys()) if team_options and team_options["group_memberships"] else "No hay grupos",
                 "✅" if team_options and team_options["group_memberships"] else "🟥"
             ),
-            "Alumnos Asignados": (
-                f"{len(team_options['unassigned_students'])} sin asignar" if team_options and not team_options["all_assigned"] else "Todos asignados",
+            "Alumnos sin asignar": (
+                unassigned_text,
                 "✅" if team_options and team_options["all_assigned"] else "🟥"
             ),
     })
