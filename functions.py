@@ -24,7 +24,7 @@ def canvas_request(session, method, endpoint, payload=None, paginated=False):
     try:
         while url:
             if method.lower() == "get":
-                response = session.get(url)
+                response = session.get(url, json=payload)
             elif method.lower() == "post":
                 response = session.post(url, json=payload)
             elif method.lower() == "put":
@@ -53,6 +53,32 @@ def canvas_request(session, method, endpoint, payload=None, paginated=False):
     except requests.exceptions.RequestException as e:
         print(f"Excepción en la petición a {url}: {e}")
         return None
+    
+
+def get_student_count(session, course_id):
+    """
+    Obtiene la cantidad de alumnos en un curso específico utilizando la función canvas_request.
+    
+    :param session: Sesión de requests.Session() configurada previamente.
+    :param course_id: ID del curso.
+    :return: Número de alumnos en el curso o None en caso de error.
+    """
+    # Endpoint para obtener la lista de estudiantes en un curso
+    endpoint = f"/courses/{course_id}/enrollments"
+    
+    # Parámetros para filtrar solo estudiantes
+    params = {
+        "type": "StudentEnrollment",  # Solo estudiantes
+    }
+
+    # Realizar la solicitud a la API usando canvas_request
+    students = canvas_request(session, "get", endpoint, payload=params, paginated=True)
+
+    # Verificar si se obtuvieron los estudiantes correctamente
+    if students is not None:
+        return len(students)  # Retornar la cantidad de estudiantes
+    else:
+        return None  # En caso de error
 
 
 def get_rubric_details(course_id, assignment):
@@ -90,8 +116,8 @@ def check_group_categories(session, course_id):
 
     group_categories = group_categories_response
 
-    trabajo_en_equipo = next((gc for gc in group_categories if gc.get("name") == "Equipo de trabajo"), None)
-    project_groups = next((gc for gc in group_categories if gc.get("name") == "Project Groups"), None)
+    trabajo_en_equipo = next((gc for gc in group_categories if clean_string(gc.get("name")) == clean_string("Equipo de trabajo") or clean_string(gc.get("name")) == clean_string("Equipos de trabajo")), None)
+    project_groups = next((gc for gc in group_categories if clean_string(gc.get("name")) == clean_string("Project Groups")), None)
 
     return {
         "Equipo de trabajo": {
@@ -114,7 +140,8 @@ def check_team_assignments(session, course_id):
     if not group_categories:
         return None
 
-    equipo_de_trabajo = next((gc for gc in group_categories if gc.get("name") == "Equipo de trabajo"), None)
+    equipo_de_trabajo = next((gc for gc in group_categories if clean_string(gc.get("name")) == clean_string("Equipo de trabajo") or clean_string(gc.get("name")) == clean_string("Equipos de trabajo")), None)
+    
     if not equipo_de_trabajo:
         return {"teams_created": False, "all_assigned": False, "group_memberships": {}, "unassigned_students": []}
 

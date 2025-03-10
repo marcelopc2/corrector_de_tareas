@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 from config import HEADERS
-from  functions import canvas_request, return_df_for_table, analyze_assignment
+from  functions import canvas_request, return_df_for_table, analyze_assignment, get_student_count
 from helpers import clean_string, parse_course_ids
 
 session = requests.Session()
@@ -42,6 +42,7 @@ if st.button("Ejecutar"):
                 st.markdown(f"##### [{course_info.get('name')} - ({course_info.get('id')}) - {course_info.get('course_code')}](https://canvas.uautonoma.cl/courses/{course_id}/assignments)", unsafe_allow_html=True)
                 st.markdown(f"###### {subaccount_info.get('name')} - ({subaccount_info.get('id')})", unsafe_allow_html=True)
                 st.markdown(f"###### Diplomado Masivo: {is_massive}", unsafe_allow_html=True)
+                st.markdown(f"###### Cantidad de Alumnos: {get_student_count(session, course_id)}", unsafe_allow_html=True)
                 
                 course_assignments = canvas_request(session, "get", f"/courses/{course_id}/assignments") or []
                 if not course_assignments:
