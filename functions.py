@@ -397,3 +397,17 @@ def return_df_for_table(details, estado):
     
     df = pd.DataFrame(data)
     return df
+
+
+def fix_submission_type(session, course_id, assignment_id, expected_type):
+    """
+    Corrige el tipo de entrega de una tarea si es incorrecto.
+    """
+    update_payload = {"assignment": {"submission_types": [expected_type]}}
+    response = canvas_request(session, "put", f"/courses/{course_id}/assignments/{assignment_id}", payload=update_payload)
+    
+    if response:
+        return f"✅ Tipo de entrega corregido a {expected_type}."
+    else:
+        return f"⚠️ No se pudo corregir el tipo de entrega."
+

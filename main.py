@@ -9,6 +9,7 @@ session.headers.update(HEADERS)
 
 st.set_page_config(page_title="REVISADOR y CONFIGURADOR DE TAREAS ⛑️", page_icon="⛑️")
 st.title("REVISADOR y CONFIGURADOR DE TAREAS ⛑️")
+st.info("Si encuentras algun error o tienes alguna sugerencia, por favor, envia un email a instruccional2.die@uautonoma.cl")
 
 st.subheader("Ingresar IDs de Cursos")
 course_ids_input = st.text_area(
